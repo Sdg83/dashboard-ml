@@ -17,6 +17,14 @@ TOKEN_FILE = os.getenv("TOKEN_FILE_PATH", "token.json")
 
 app = FastAPI()
 
+USER_IDS_POR_SITIO = {
+    "MLA": 2964561487,
+    "MLB": 2964561513,
+    "MCO": 2964837918,
+    "MLC": 2964837908,
+    "MLM": 2964837940,
+}
+
 NAV_HTML = """
 <div style="background:#333; padding:14px 40px; margin:-40px -40px 30px -40px; display:flex; gap:24px; align-items:center;">
     <a href="/dashboard" style="color:#fff; text-decoration:none; font-weight:bold;">Dashboard</a>
@@ -191,11 +199,14 @@ def dashboard(msg: str = None, detalle: str = None):
 
         titulo = item.get("title", "Sin titulo")
         precio = item.get("price", "-")
+        ganancia_actual = precio if isinstance(precio, (int, float)) else ""
         stock = item.get("available_quantity", "-")
         estado = item.get("status", "-")
         foto = item.get("thumbnail", "")
-        paises = ", ".join(sorted(set(m["site_id"] for m in item.get("marketplace_items", []))))
         marketplace_items = item.get("marketplace_items", [])
+        sites_ids = sorted(set(m["site_id"] for m in marketplace_items))
+        paises = ", ".join(sites_ids)
+        sites_csv = ",".join(sites_ids)
         siteless_id = marketplace_items[0]["siteless_user_product_id"] if marketplace_items else ""
 
         color_estado = "#2e7d32" if estado == "active" else "#f9a825"
@@ -205,7 +216,15 @@ def dashboard(msg: str = None, detalle: str = None):
         <tr>
             <td><img src="{foto}" width="60"></td>
             <td>{titulo}</td>
-            <td>USD {precio}</td>
+            <td>
+                USD {precio}
+                <form action="/cambiar-precio" method="get" style="margin-top:4px;">
+                    <input type="hidden" name="siteless_id" value="{siteless_id}">
+                    <input type="hidden" name="sites" value="{sites_csv}">
+                    <input type="number" step="0.01" name="nueva_ganancia" style="width:70px;" value="{ganancia_actual}" min="0" placeholder="Ganancia">
+                    <button type="submit">Actualizar</button>
+                </form>
+            </td>
             <td>{stock}</td>
             <td style="color:{color_estado}; font-weight:bold;">{texto_estado}</td>
             <td>{paises}</td>
@@ -242,7 +261,7 @@ def dashboard(msg: str = None, detalle: str = None):
             <tr>
                 <th>Foto</th>
                 <th>Producto</th>
-                <th>Precio</th>
+                <th>Ganancia (USD)</th>
                 <th>Stock</th>
                 <th>Estado</th>
                 <th>Paises</th>
@@ -572,14 +591,6 @@ async def crear_publicacion(request: Request):
     if not any(a["id"] == "ITEM_CONDITION" for a in attributes):
         attributes.append({"id": "ITEM_CONDITION", "values": [{"id": "2230284", "name": "New"}]})
 
-    USER_IDS_POR_SITIO = {
-        "MLA": 2964561487,
-        "MLB": 2964561513,
-        "MCO": 2964837918,
-        "MLC": 2964837908,
-        "MLM": 2964837940,
-    }
-
     body = {
         "sites_to_sell": [
             {
@@ -686,13 +697,6 @@ def reintentar_paises(siteless_id: str, ganancia: float, paises: str):
         "Content-Type": "application/json",
     }
 
-    USER_IDS_POR_SITIO = {
-        "MLA": 2964561487,
-        "MLB": 2964561513,
-        "MCO": 2964837918,
-        "MLC": 2964837908,
-    }
-
     lista_paises = paises.split(",")
     body = {
         "sites_to_sell": [
@@ -743,6 +747,42 @@ def cambiar_stock(siteless_id: str, nueva_cantidad: int):
     }
     url = f"https://api.mercadolibre.com/global/user-products/{siteless_id}"
     body = {"available_quantity": nueva_cantidad}
+    response = requests.put(url, headers=headers, json=body)
+
+    if response.status_code == 200:
+        return RedirectResponse(url="/dashboard?msg=ok")
+
+    detalle = response.json().get("message", f"HTTP {response.status_code}")
+    return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
+
+
+@app.get("/cambiar-precio")
+def cambiar_precio(siteless_id: str, nueva_ganancia: float, sites: str):
+    access_token = obtener_access_token()
+    if not access_token:
+        return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote('No se pudo renovar el token')}")
+
+    lista_sites = [s for s in sites.split(",") if s in USER_IDS_POR_SITIO]
+    if not lista_sites:
+        detalle = "No se pudo determinar en que paises esta publicado (proba de nuevo en unos minutos)"
+        return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    url = f"https://api.mercadolibre.com/global/user-products/{siteless_id}"
+    body = {
+        "sites_to_sell": [
+            {
+                "site_id": site,
+                "logistic_type": "remote",
+                "user_id": USER_IDS_POR_SITIO[site],
+                "net_proceeds": nueva_ganancia,
+            }
+            for site in lista_sites
+        ]
+    }
     response = requests.put(url, headers=headers, json=body)
 
     if response.status_code == 200:
