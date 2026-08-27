@@ -79,10 +79,10 @@ def home():
     return HTMLResponse(f'<a href="{auth_url}">Conectar con Mercado Libre</a>')
 
 
-@app.get("/callback")
+@app.get("/callback", response_class=HTMLResponse)
 def callback(code: str = None):
     if not code:
-        return {"error": "No llego el codigo de autorizacion"}
+        return HTMLResponse("<h2>No llego el codigo de autorizacion.</h2><a href='/'>Volver</a>")
 
     token_url = "https://api.mercadolibre.com/oauth/token"
     payload = {
@@ -97,8 +97,13 @@ def callback(code: str = None):
 
     if "access_token" in data:
         guardar_token(data)
+        return HTMLResponse(
+            "<h2 style='color:green;'>Conectado con exito!</h2>"
+            "<a href='/dashboard'><button>Ir al Dashboard</button></a>"
+        )
 
-    return data
+    detalle = data.get("message", "Error desconocido")
+    return HTMLResponse(f"<h2 style='color:red;'>No se pudo conectar: {detalle}</h2><a href='/'>Volver a intentar</a>")
 
 
 @app.get("/perfil")
