@@ -4,7 +4,7 @@ import time
 import requests
 from urllib.parse import quote
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,6 +16,14 @@ REDIRECT_URI = os.getenv("ML_REDIRECT_URI")
 TOKEN_FILE = os.getenv("TOKEN_FILE_PATH", "token.json")
 
 app = FastAPI()
+
+NAV_HTML = """
+<div style="background:#333; padding:14px 40px; margin:-40px -40px 30px -40px; display:flex; gap:24px; align-items:center;">
+    <a href="/dashboard" style="color:#fff; text-decoration:none; font-weight:bold;">Dashboard</a>
+    <a href="/ventas" style="color:#fff; text-decoration:none; font-weight:bold;">Ventas</a>
+    <a href="/publicar" style="text-decoration:none; font-weight:bold; background:#ffe600; color:#333; padding:6px 14px; border-radius:4px;">+ Publicar producto</a>
+</div>
+"""
 
 
 def guardar_token(data):
@@ -227,6 +235,7 @@ def dashboard(msg: str = None, detalle: str = None):
         </style>
     </head>
     <body>
+        {NAV_HTML}
         <h1>Mis Publicaciones - Global Selling</h1>
         {banner}
         <table>
@@ -262,17 +271,18 @@ def categoria(q: str):
 
 @app.get("/publicar", response_class=HTMLResponse)
 def publicar_form():
-    html = """
+    html = f"""
     <html>
     <head>
         <title>Publicar producto</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-            input[type=text] { width: 400px; padding: 8px; font-size: 16px; }
-            button { padding: 8px 16px; font-size: 16px; background: #ffe600; border: none; cursor: pointer; }
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            input[type=text] {{ width: 400px; padding: 8px; font-size: 16px; }}
+            button {{ padding: 8px 16px; font-size: 16px; background: #ffe600; border: none; cursor: pointer; }}
         </style>
     </head>
     <body>
+        {NAV_HTML}
         <h1>Publicar producto nuevo</h1>
         <form action="/buscar-categoria" method="get">
             <label>Nombre del producto (en ingles funciona mejor):</label><br><br>
@@ -323,6 +333,7 @@ def buscar_categoria(titulo: str):
         </style>
     </head>
     <body>
+        {NAV_HTML}
         <h1>Elegi la categoria correcta para: "{titulo}"</h1>
         <table>
             <tr><th>Categoria</th><th>Tipo de producto</th><th></th></tr>
@@ -345,6 +356,7 @@ def render_formulario_publicacion(titulo, category_id, campos_html, foto_url_pre
         </style>
     </head>
     <body>
+        {NAV_HTML}
         <h1>Completa los datos de: {titulo}</h1>
         <form action="/crear-publicacion" method="post" enctype="multipart/form-data">
             <input type="hidden" name="titulo" value="{titulo}">
@@ -681,3 +693,128 @@ def cambiar_stock(siteless_id: str, nueva_cantidad: int):
 
     detalle = response.json().get("message", f"HTTP {response.status_code}")
     return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
+
+
+@app.get("/ventas", response_class=HTMLResponse)
+def ventas():
+    token_data = cargar_token()
+    if not token_data:
+        return HTMLResponse("<h2>No hay token guardado. <a href='/'>Conectate primero</a></h2>")
+
+    access_token = obtener_access_token()
+    if not access_token:
+        return HTMLResponse("<h2>No se pudo renovar el token. <a href='/'>Conectate de nuevo</a></h2>")
+
+    user_id = token_data["user_id"]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    url = f"https://api.mercadolibre.com/marketplace/orders/search?seller={user_id}"
+    data = requests.get(url, headers=headers).json()
+    resultados = data.get("results", [])
+
+    ESTADOS_ES = {
+        "pending": "Pendiente",
+        "ready_to_ship": "Listo para enviar",
+        "shipped": "Enviado",
+        "delivered": "Entregado",
+        "not_delivered": "No entregado",
+        "cancelled": "Cancelado",
+    }
+    ESTADOS_IMPRIMIBLES = {"pending", "ready_to_ship", "handling"}
+
+    filas = ""
+    for orden in resultados:
+        item_id = orden.get("config", {}).get("items", [{}])[0].get("id", "")
+        buyer_id = orden.get("buyer", {}).get("id", "")
+        shipment_id = orden.get("shipment", {}).get("id")
+
+        item = requests.get(f"https://api.mercadolibre.com/marketplace/items/{item_id}", headers=headers).json()
+        titulo = item.get("title", "Sin titulo")
+        foto = item.get("thumbnail", "")
+
+        estado_raw, tracking = "", ""
+        if shipment_id:
+            envio = requests.get(f"https://api.mercadolibre.com/marketplace/shipments/{shipment_id}", headers=headers).json()
+            estado_raw = envio.get("status", "")
+            tracking = envio.get("tracking_number") or ""
+
+        comprador = ""
+        if buyer_id:
+            u = requests.get(f"https://api.mercadolibre.com/users/{buyer_id}", headers=headers).json()
+            comprador = u.get("nickname", "")
+
+        estado = ESTADOS_ES.get(estado_raw, estado_raw or "-")
+        boton_etiqueta = (
+            f'<a href="/etiqueta?shipment_id={shipment_id}"><button>Imprimir etiqueta</button></a>'
+            if shipment_id and estado_raw in ESTADOS_IMPRIMIBLES
+            else "-"
+        )
+
+        filas += f"""
+        <tr>
+            <td><img src="{foto}" width="50"></td>
+            <td>{titulo}</td>
+            <td>{comprador}</td>
+            <td>{estado}</td>
+            <td>{tracking}</td>
+            <td>{boton_etiqueta}</td>
+        </tr>
+        """
+
+    html = f"""
+    <html>
+    <head>
+        <title>Ventas - Global Selling</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            h1 {{ color: #333; }}
+            table {{ width: 100%; border-collapse: collapse; background: white; }}
+            th, td {{ padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }}
+            th {{ background: #ffe600; }}
+        </style>
+    </head>
+    <body>
+        {NAV_HTML}
+        <h1>Ventas - Global Selling</h1>
+        <table>
+            <tr>
+                <th>Foto</th>
+                <th>Producto</th>
+                <th>Comprador</th>
+                <th>Estado envio</th>
+                <th>Tracking</th>
+                <th>Etiqueta</th>
+            </tr>
+            {filas if filas else '<tr><td colspan="6">Todavia no tenes ventas.</td></tr>'}
+        </table>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
+
+@app.get("/etiqueta")
+def etiqueta(shipment_id: str):
+    access_token = obtener_access_token()
+    if not access_token:
+        return HTMLResponse("<h2>No se pudo renovar el token. <a href='/ventas'>Volver</a></h2>")
+
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/pdf"}
+    url = f"https://api.mercadolibre.com/marketplace/shipments/{shipment_id}/labels"
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200 and "pdf" in response.headers.get("Content-Type", ""):
+        return Response(
+            content=response.content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"inline; filename=etiqueta-{shipment_id}.pdf"},
+        )
+
+    try:
+        detalle = response.json().get("message", f"HTTP {response.status_code}")
+    except ValueError:
+        detalle = f"HTTP {response.status_code}"
+
+    return HTMLResponse(
+        f"<h2 style='color:red;'>No se pudo generar la etiqueta: {detalle}</h2><a href='/ventas'>Volver</a>"
+    )
