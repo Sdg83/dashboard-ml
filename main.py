@@ -293,6 +293,48 @@ def publicar_form():
         <hr style="margin:30px 0;">
 
         <p>Para copiar titulo, categoria, atributos y foto de <b>una publicacion tuya existente</b> y solo ajustar precio y stock, anda al <a href="/dashboard">Dashboard</a> y usa el boton "Duplicar" en esa fila.</p>
+
+        <hr style="margin:30px 0;">
+
+        <p>Para cargar un producto que encontraste en Amazon, Walmart u otro sitio: abrilo en otra pestana, copia el titulo, la descripcion y los links de las fotos, y pegalos aca. <a href="/externo">Cargar producto externo</a></p>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
+
+@app.get("/externo", response_class=HTMLResponse)
+def externo_form():
+    html = f"""
+    <html>
+    <head>
+        <title>Cargar producto externo</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            input[type=text], textarea {{ width: 500px; padding: 8px; font-size: 16px; }}
+            button {{ padding: 8px 16px; font-size: 16px; background: #ffe600; border: none; cursor: pointer; }}
+        </style>
+    </head>
+    <body>
+        {NAV_HTML}
+        <h1>Cargar producto externo (Amazon, Walmart, etc)</h1>
+        <p>Abri el producto en otra pestana y copia/pega cada dato aca. Despues elegis la categoria de Mercado Libre igual que siempre.</p>
+        <form action="/buscar-categoria" method="get">
+            <p><label>Titulo (en ingles funciona mejor para encontrar la categoria):</label><br>
+            <input type="text" name="titulo" placeholder="Ej: Himalayan Pink Salt 16oz"></p>
+
+            <p><label>Descripcion:</label><br>
+            <textarea name="descripcion" rows="5"></textarea></p>
+
+            <p><label>URL de la foto principal:</label><br>
+            <input type="text" name="foto_url"></p>
+
+            <p><label>URLs de fotos adicionales (una por linea):</label><br>
+            <textarea name="fotos_extra" rows="4"></textarea></p>
+
+            <button type="submit">Buscar categoria</button>
+        </form>
+        <br><a href="/publicar">Volver</a>
     </body>
     </html>
     """
@@ -300,7 +342,7 @@ def publicar_form():
 
 
 @app.get("/buscar-categoria", response_class=HTMLResponse)
-def buscar_categoria(titulo: str):
+def buscar_categoria(titulo: str, descripcion: str = "", foto_url: str = "", fotos_extra: str = ""):
     token_data = cargar_token()
     if not token_data:
         return HTMLResponse("<h2>No hay token guardado. <a href='/'>Conectate primero</a></h2>")
@@ -310,13 +352,15 @@ def buscar_categoria(titulo: str):
     url = f"https://api.mercadolibre.com/marketplace/domain_discovery/search?q={titulo}"
     opciones = requests.get(url, headers=headers).json()
 
+    extras = f"&titulo={quote(titulo)}&descripcion={quote(descripcion)}&foto_url={quote(foto_url)}&fotos_extra={quote(fotos_extra)}"
+
     filas = ""
     for op in opciones:
         filas += f"""
         <tr>
             <td>{op['category_name']}</td>
             <td>{op['domain_name']}</td>
-            <td><a href="/atributos?titulo={titulo}&category_id={op['category_id']}&domain_id={op['domain_id']}">
+            <td><a href="/atributos?category_id={op['category_id']}&domain_id={op['domain_id']}{extras}">
                 <button>Elegir esta</button></a></td>
         </tr>
         """
@@ -345,7 +389,7 @@ def buscar_categoria(titulo: str):
     """
     return HTMLResponse(html)
 
-def render_formulario_publicacion(titulo, category_id, campos_html, foto_url_prefill=""):
+def render_formulario_publicacion(titulo, category_id, campos_html, foto_url_prefill="", descripcion_prefill="", fotos_extra_prefill=""):
     return f"""
     <html>
     <head>
@@ -377,11 +421,17 @@ def render_formulario_publicacion(titulo, category_id, campos_html, foto_url_pre
             <label><input type="checkbox" name="paises" value="MCO" checked> Colombia</label><br>
             <label><input type="checkbox" name="paises" value="MLC" checked> Chile</label></p>
 
-            <p><label>Foto - opcion 1, link directo a una imagen .jpg o .png:</label><br>
+            <p><label>Descripcion:</label><br>
+            <textarea name="descripcion" rows="4" style="width:500px;">{descripcion_prefill}</textarea></p>
+
+            <p><label>Foto principal - opcion 1, link directo a una imagen .jpg o .png:</label><br>
             <input type="text" name="foto_url" style="width:500px;" value="{foto_url_prefill}"></p>
 
-            <p><label>Foto - opcion 2, subi una imagen desde tu computadora (si elegis un archivo, se usa en vez del link):</label><br>
+            <p><label>Foto principal - opcion 2, subi una imagen desde tu computadora (si elegis un archivo, se usa en vez del link):</label><br>
             <input type="file" name="foto_archivo" accept="image/*"></p>
+
+            <p><label>Fotos adicionales (opcional, una URL por linea):</label><br>
+            <textarea name="fotos_extra" rows="4" style="width:500px;">{fotos_extra_prefill}</textarea></p>
 
             {campos_html}
 
@@ -394,7 +444,7 @@ def render_formulario_publicacion(titulo, category_id, campos_html, foto_url_pre
 
 
 @app.get("/atributos", response_class=HTMLResponse)
-def atributos(titulo: str, category_id: str, domain_id: str):
+def atributos(titulo: str, category_id: str, domain_id: str, descripcion: str = "", foto_url: str = "", fotos_extra: str = ""):
     token_data = cargar_token()
     if not token_data:
         return HTMLResponse("<h2>No hay token guardado. <a href='/'>Conectate primero</a></h2>")
@@ -426,7 +476,7 @@ def atributos(titulo: str, category_id: str, domain_id: str):
             <input type="text" name="attr_{aid}"></p>
             """
 
-    return HTMLResponse(render_formulario_publicacion(titulo, category_id, campos))
+    return HTMLResponse(render_formulario_publicacion(titulo, category_id, campos, foto_url, descripcion, fotos_extra))
 
 
 @app.get("/duplicar", response_class=HTMLResponse)
@@ -482,6 +532,8 @@ async def crear_publicacion(request: Request):
     cantidad = form.get("cantidad")
     foto_url = form.get("foto_url")
     foto_archivo = form.get("foto_archivo")
+    descripcion = form.get("descripcion") or titulo
+    fotos_extra = form.get("fotos_extra") or ""
 
     access_token = obtener_access_token()
 
@@ -499,6 +551,11 @@ async def crear_publicacion(request: Request):
 
     if not pictures and foto_url:
         pictures = [{"source": foto_url}]
+
+    for linea in fotos_extra.splitlines():
+        linea = linea.strip()
+        if linea:
+            pictures.append({"source": linea})
 
     CAMPOS_NUMERICOS = ["PACKAGE_HEIGHT", "PACKAGE_WIDTH", "PACKAGE_LENGTH", "PACKAGE_WEIGHT"]
 
@@ -534,7 +591,7 @@ async def crear_publicacion(request: Request):
             for site in SITIOS
         ],
         "title": titulo,
-        "description": {"plain_text": titulo},
+        "description": {"plain_text": descripcion},
         "category_id": category_id,
         "currency_id": "USD",
         "available_quantity": int(cantidad),
