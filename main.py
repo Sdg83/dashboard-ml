@@ -169,7 +169,7 @@ def publicaciones_detalle():
     return {"total": len(detalles), "publicaciones": detalles}
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(msg: str = None, detalle: str = None):
+def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden: str = "", buscar: str = ""):
     token_data = cargar_token()
     if not token_data:
         return HTMLResponse("<h2>No hay token guardado. <a href='/'>Conectate primero</a></h2>")
@@ -192,25 +192,62 @@ def dashboard(msg: str = None, detalle: str = None):
     lista = requests.get(url_lista, headers=headers).json()
     ids = lista.get("results", [])
 
-    filas = ""
+    productos = []
     for item_id in ids:
         url_item = f"https://api.mercadolibre.com/marketplace/items/{item_id}"
         item = requests.get(url_item, headers=headers).json()
 
-        titulo = item.get("title", "Sin titulo")
         precio = item.get("price", "-")
-        ganancia_actual = precio if isinstance(precio, (int, float)) else ""
-        stock = item.get("available_quantity", "-")
-        estado = item.get("status", "-")
-        foto = item.get("thumbnail", "")
+        stock_valor = item.get("available_quantity", 0) or 0
         marketplace_items = item.get("marketplace_items", [])
-        sites_ids = sorted(set(m["site_id"] for m in marketplace_items))
-        paises = ", ".join(sites_ids)
-        sites_csv = ",".join(sites_ids)
-        siteless_id = marketplace_items[0]["siteless_user_product_id"] if marketplace_items else ""
 
-        color_estado = "#2e7d32" if estado == "active" else "#f9a825"
-        texto_estado = "Activa" if estado == "active" else "Pausada"
+        productos.append({
+            "item_id": item_id,
+            "titulo": item.get("title", "Sin titulo"),
+            "precio": precio,
+            "ganancia_actual": precio if isinstance(precio, (int, float)) else "",
+            "stock": item.get("available_quantity", "-"),
+            "stock_valor": stock_valor,
+            "vendidos": item.get("sold_quantity", 0) or 0,
+            "estado": item.get("status", "-"),
+            "foto": item.get("thumbnail", ""),
+            "sites_ids": sorted(set(m["site_id"] for m in marketplace_items)),
+            "siteless_id": marketplace_items[0]["siteless_user_product_id"] if marketplace_items else "",
+        })
+
+    if estado in ("active", "paused"):
+        productos = [p for p in productos if p["estado"] == estado]
+
+    if buscar:
+        buscar_lower = buscar.lower()
+        productos = [p for p in productos if buscar_lower in p["titulo"].lower()]
+
+    ORDENES = {
+        "stock_desc": ("stock_valor", True),
+        "stock_asc": ("stock_valor", False),
+        "vendidos_desc": ("vendidos", True),
+        "vendidos_asc": ("vendidos", False),
+    }
+    if orden in ORDENES:
+        campo, descendente = ORDENES[orden]
+        productos.sort(key=lambda p: p[campo], reverse=descendente)
+
+    filas = ""
+    for p in productos:
+        item_id = p["item_id"]
+        titulo = p["titulo"]
+        precio = p["precio"]
+        ganancia_actual = p["ganancia_actual"]
+        stock = p["stock"]
+        vendidos = p["vendidos"]
+        estado_item = p["estado"]
+        foto = p["foto"]
+        paises = ", ".join(p["sites_ids"])
+        sites_csv = ",".join(p["sites_ids"])
+        siteless_id = p["siteless_id"]
+
+        color_estado = "#2e7d32" if estado_item == "active" else "#f9a825"
+        texto_estado = "Activa" if estado_item == "active" else "Pausada"
 
         filas += f"""
         <tr>
@@ -226,6 +263,7 @@ def dashboard(msg: str = None, detalle: str = None):
                 </form>
             </td>
             <td>{stock}</td>
+            <td>{vendidos}</td>
             <td style="color:{color_estado}; font-weight:bold;">{texto_estado}</td>
             <td>{paises}</td>
             <td>
@@ -258,17 +296,44 @@ def dashboard(msg: str = None, detalle: str = None):
         {NAV_HTML}
         <h1>Mis Publicaciones - Global Selling</h1>
         {banner}
+        <form method="get" style="background:white; padding:16px; border-radius:4px; margin-bottom:16px; display:flex; gap:16px; align-items:end; flex-wrap:wrap;">
+            <div>
+                <label>Buscar por titulo:</label><br>
+                <input type="text" name="buscar" value="{buscar}" placeholder="Ej: salt">
+            </div>
+            <div>
+                <label>Estado:</label><br>
+                <select name="estado">
+                    <option value="todos" {"selected" if estado == "todos" else ""}>Todos</option>
+                    <option value="active" {"selected" if estado == "active" else ""}>Activos</option>
+                    <option value="paused" {"selected" if estado == "paused" else ""}>Pausados</option>
+                </select>
+            </div>
+            <div>
+                <label>Ordenar por:</label><br>
+                <select name="orden">
+                    <option value="" {"selected" if orden == "" else ""}>Sin orden</option>
+                    <option value="stock_desc" {"selected" if orden == "stock_desc" else ""}>Stock: mayor a menor</option>
+                    <option value="stock_asc" {"selected" if orden == "stock_asc" else ""}>Stock: menor a mayor</option>
+                    <option value="vendidos_desc" {"selected" if orden == "vendidos_desc" else ""}>Vendidos: mayor a menor</option>
+                    <option value="vendidos_asc" {"selected" if orden == "vendidos_asc" else ""}>Vendidos: menor a mayor</option>
+                </select>
+            </div>
+            <button type="submit">Filtrar</button>
+            <a href="/dashboard" style="align-self:center;">Limpiar filtros</a>
+        </form>
         <table>
             <tr>
                 <th>Foto</th>
                 <th>Producto</th>
                 <th>Ganancia (USD)</th>
                 <th>Stock</th>
+                <th>Vendidos</th>
                 <th>Estado</th>
                 <th>Paises</th>
                 <th>Acciones</th>
             </tr>
-            {filas}
+            {filas if productos else '<tr><td colspan="8">No hay publicaciones que coincidan con el filtro.</td></tr>'}
         </table>
     </body>
     </html>
