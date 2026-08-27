@@ -237,6 +237,7 @@ def dashboard(msg: str = None, detalle: str = None):
                     <button type="submit">Actualizar</button>
                 </form>
                 <a href="/duplicar?item_id={item_id}"><button>Duplicar</button></a>
+                <a href="/editar?item_id={item_id}"><button>Editar</button></a>
             </td>
         </tr>
         """
@@ -534,6 +535,143 @@ def duplicar(item_id: str):
         """
 
     return HTMLResponse(render_formulario_publicacion(titulo, category_id, campos, foto_url_prefill))
+
+
+@app.get("/editar", response_class=HTMLResponse)
+def editar(item_id: str):
+    token_data = cargar_token()
+    if not token_data:
+        return HTMLResponse("<h2>No hay token guardado. <a href='/'>Conectate primero</a></h2>")
+
+    access_token = obtener_access_token()
+    headers = {"Authorization": f"Bearer {access_token}"}
+    item = requests.get(f"https://api.mercadolibre.com/marketplace/items/{item_id}", headers=headers).json()
+
+    if "id" not in item:
+        detalle = item.get("message", "Publicacion no encontrada")
+        return HTMLResponse(
+            f"<h2>No se pudo leer esa publicacion: {detalle}</h2><a href='/dashboard'>Volver</a>"
+        )
+
+    titulo = item.get("title", "")
+    cbt_id = item.get("id", "")
+    marketplace_items = item.get("marketplace_items", [])
+    siteless_id = marketplace_items[0]["siteless_user_product_id"] if marketplace_items else ""
+    pictures = item.get("pictures", [])
+    foto_actual = pictures[0].get("secure_url") or pictures[0].get("url") if pictures else ""
+
+    descripcion_actual = ""
+    if marketplace_items:
+        site_id = marketplace_items[0]["site_id"]
+        desc = requests.get(
+            f"https://api.mercadolibre.com/marketplace/items/{cbt_id}/description"
+            f"?site_id={site_id}&logistic_type=remote",
+            headers=headers,
+        ).json()
+        descripcion_actual = desc.get("plain_text", "")
+
+    html = f"""
+    <html>
+    <head>
+        <title>Editar publicacion</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            input[type=text], textarea {{ width: 500px; padding: 8px; font-size: 16px; }}
+            button {{ padding: 8px 16px; font-size: 16px; background: #ffe600; border: none; cursor: pointer; }}
+        </style>
+    </head>
+    <body>
+        {NAV_HTML}
+        <h1>Editar publicacion</h1>
+        <img src="{foto_actual}" width="120"><br><br>
+        <form action="/actualizar-publicacion" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="siteless_id" value="{siteless_id}">
+            <input type="hidden" name="item_id" value="{item_id}">
+
+            <p><label>Titulo:</label><br>
+            <input type="text" name="titulo" value="{titulo}"></p>
+
+            <p><label>Descripcion:</label><br>
+            <textarea name="descripcion" rows="5">{descripcion_actual}</textarea></p>
+
+            <p><label>Nueva foto - opcion 1, link directo a una imagen (dejar vacio para no cambiarla):</label><br>
+            <input type="text" name="foto_url"></p>
+
+            <p><label>Nueva foto - opcion 2, subi un archivo desde tu computadora:</label><br>
+            <input type="file" name="foto_archivo" accept="image/*"></p>
+
+            <button type="submit">Guardar cambios</button>
+        </form>
+        <br><a href="/dashboard">Volver</a>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
+
+@app.post("/actualizar-publicacion", response_class=HTMLResponse)
+async def actualizar_publicacion(request: Request):
+    access_token = obtener_access_token()
+    if not access_token:
+        return HTMLResponse("<h2>No se pudo renovar el token. <a href='/dashboard'>Volver</a></h2>")
+
+    form = await request.form()
+    siteless_id = form.get("siteless_id")
+    item_id = form.get("item_id")
+    titulo = form.get("titulo")
+    descripcion = form.get("descripcion")
+    foto_url = form.get("foto_url")
+    foto_archivo = form.get("foto_archivo")
+
+    headers_json = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    headers_auth = {"Authorization": f"Bearer {access_token}"}
+
+    body = {}
+    if titulo:
+        body["title"] = titulo
+    if descripcion:
+        body["description"] = {"plain_text": descripcion}
+
+    contenido_foto = None
+    nombre_archivo = "foto.jpg"
+    tipo_archivo = "image/jpeg"
+    if foto_archivo is not None and getattr(foto_archivo, "filename", ""):
+        contenido_foto = await foto_archivo.read()
+        nombre_archivo = foto_archivo.filename
+        tipo_archivo = foto_archivo.content_type
+    elif foto_url:
+        descarga = requests.get(foto_url)
+        if descarga.status_code == 200:
+            contenido_foto = descarga.content
+
+    if contenido_foto:
+        files = {"file": (nombre_archivo, contenido_foto, tipo_archivo)}
+        pic_response = requests.post(
+            "https://api.mercadolibre.com/pictures/items/upload", headers=headers_auth, files=files
+        )
+        pic_data = pic_response.json()
+        if pic_response.status_code in (200, 201) and pic_data.get("id"):
+            body["pictures"] = [{"id": pic_data["id"]}]
+        else:
+            detalle = pic_data.get("message", "No se pudo subir la nueva foto")
+            return HTMLResponse(
+                f"<h2 style='color:red;'>Error con la foto: {detalle}</h2>"
+                f"<a href='/editar?item_id={item_id}'>Volver a intentar</a> | <a href='/dashboard'>Volver al dashboard</a>"
+            )
+
+    if not body:
+        return RedirectResponse(url="/dashboard?msg=ok")
+
+    url = f"https://api.mercadolibre.com/global/user-products/{siteless_id}"
+    response = requests.put(url, headers=headers_json, json=body)
+
+    if response.status_code == 200:
+        return RedirectResponse(url="/dashboard?msg=ok")
+
+    resultado = response.json()
+    detalle = resultado.get("message") or json.dumps(resultado.get("errors", resultado))
+    return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(str(detalle))}")
+
 
 @app.post("/crear-publicacion", response_class=HTMLResponse)
 async def crear_publicacion(request: Request):
