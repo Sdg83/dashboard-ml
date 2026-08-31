@@ -183,7 +183,8 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
 
     banner = ""
     if msg == "ok":
-        banner = '<div style="background:#e6f4ea;color:#2e7d32;padding:12px;border-radius:4px;margin-bottom:16px;">Cambio aplicado con exito.</div>'
+        detalle_txt = f" {detalle}" if detalle else ""
+        banner = f'<div style="background:#e6f4ea;color:#2e7d32;padding:12px;border-radius:4px;margin-bottom:16px;">Cambio aplicado con exito.{detalle_txt}</div>'
     elif msg == "error":
         detalle_txt = detalle or "Error desconocido"
         banner = f'<div style="background:#fdecea;color:#c62828;padding:12px;border-radius:4px;margin-bottom:16px;">Error al aplicar el cambio: {detalle_txt}</div>'
@@ -891,6 +892,29 @@ def diagnostico():
     url = f"https://api.mercadolibre.com/marketplace/users/{user_id}"
     return requests.get(url, headers=headers).json()
 
+NOTIFICACIONES_FILE = "notificaciones.log"
+
+@app.post("/notificaciones")
+async def recibir_notificacion(request: Request):
+    data = await request.json()
+    print(f"[notificacion ML] {json.dumps(data)}")
+    try:
+        with open(NOTIFICACIONES_FILE, "a") as f:
+            f.write(json.dumps(data) + "\n")
+    except Exception:
+        pass
+    return {"received": True}
+
+@app.get("/notificaciones", response_class=HTMLResponse)
+def ver_notificaciones():
+    try:
+        with open(NOTIFICACIONES_FILE) as f:
+            lineas = f.readlines()[-50:]
+    except FileNotFoundError:
+        lineas = []
+    filas = "".join(f"<pre>{linea}</pre>" for linea in reversed(lineas))
+    return HTMLResponse(f"<h2>Ultimas notificaciones de ML</h2>{filas or '<p>Sin notificaciones todavia.</p>'}")
+
 @app.get("/reintentar-paises")
 def reintentar_paises(siteless_id: str, ganancia: float, paises: str):
     token_data = cargar_token()
@@ -932,7 +956,8 @@ def cambiar_estado(siteless_id: str, nuevo_estado: str):
     response = requests.put(url, headers=headers, json=body)
 
     if response.status_code == 200:
-        return RedirectResponse(url="/dashboard?msg=ok")
+        detalle = quote("Mercado Libre acepto el pedido. Puede tardar en reflejarse por pais.")
+        return RedirectResponse(url=f"/dashboard?msg=ok&detalle={detalle}")
 
     detalle = response.json().get("message", f"HTTP {response.status_code}")
     return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
