@@ -30,6 +30,7 @@ NAV_HTML = """
     <a href="/dashboard" style="color:#fff; text-decoration:none; font-weight:bold;">Dashboard</a>
     <a href="/ventas" style="color:#fff; text-decoration:none; font-weight:bold;">Ventas</a>
     <a href="/publicar" style="text-decoration:none; font-weight:bold; background:#ffe600; color:#333; padding:6px 14px; border-radius:4px;">+ Publicar producto</a>
+    <a href="/notificaciones" style="color:#fff; text-decoration:none; font-weight:bold;">Notificaciones</a>
 </div>
 """
 
@@ -912,8 +913,26 @@ def ver_notificaciones():
             lineas = f.readlines()[-50:]
     except FileNotFoundError:
         lineas = []
-    filas = "".join(f"<pre>{linea}</pre>" for linea in reversed(lineas))
-    return HTMLResponse(f"<h2>Ultimas notificaciones de ML</h2>{filas or '<p>Sin notificaciones todavia.</p>'}")
+    filas = "".join(
+        f'<pre style="background:white; padding:10px; border-radius:4px; margin-bottom:8px; overflow-x:auto;">{linea}</pre>'
+        for linea in reversed(lineas)
+    )
+    return HTMLResponse(f"""
+    <html>
+    <head>
+        <title>Notificaciones</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            h1 {{ color: #333; }}
+        </style>
+    </head>
+    <body>
+        {NAV_HTML}
+        <h1>Notificaciones de Mercado Libre</h1>
+        {filas or '<p>Sin notificaciones todavia.</p>'}
+    </body>
+    </html>
+    """)
 
 @app.get("/reintentar-paises")
 def reintentar_paises(siteless_id: str, ganancia: float, paises: str):
