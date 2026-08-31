@@ -212,6 +212,7 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
             "stock_valor": stock_valor,
             "vendidos": item.get("sold_quantity", 0) or 0,
             "estado": item.get("status", "-"),
+            "sub_estado": item.get("sub_status") or [],
             "foto": item.get("thumbnail", ""),
             "sites_ids": sorted(set(m["site_id"] for m in marketplace_items)),
             "siteless_id": marketplace_items[0]["siteless_user_product_id"] if marketplace_items else "",
@@ -243,13 +244,23 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
         stock = p["stock"]
         vendidos = p["vendidos"]
         estado_item = p["estado"]
+        sub_estado = p["sub_estado"]
         foto = p["foto"]
         paises = ", ".join(p["sites_ids"])
         sites_csv = ",".join(p["sites_ids"])
         siteless_id = p["siteless_id"]
 
-        color_estado = "#2e7d32" if estado_item == "active" else "#f9a825"
-        texto_estado = "Activa" if estado_item == "active" else "Pausada"
+        if estado_item == "active":
+            color_estado, texto_estado = "#2e7d32", "Activa"
+        elif estado_item == "paused":
+            color_estado, texto_estado = "#f9a825", "Pausada"
+        elif estado_item == "closed":
+            color_estado, texto_estado = "#c62828", "Cerrada por ML"
+        else:
+            color_estado, texto_estado = "#757575", estado_item
+
+        if sub_estado:
+            texto_estado += f" ({', '.join(sub_estado)})"
 
         filas += f"""
         <tr>
