@@ -743,17 +743,17 @@ async def actualizar_publicacion(request: Request):
             )
 
     if not body:
-        return RedirectResponse(url="/dashboard?msg=ok")
+        return RedirectResponse(url="/dashboard?msg=ok", status_code=303)
 
     url = f"https://api.mercadolibre.com/global/user-products/{siteless_id}"
     response = requests.put(url, headers=headers_json, json=body)
 
     if response.status_code == 200:
-        return RedirectResponse(url="/dashboard?msg=ok")
+        return RedirectResponse(url="/dashboard?msg=ok", status_code=303)
 
     resultado = response.json()
     detalle = resultado.get("message") or json.dumps(resultado.get("errors", resultado))
-    return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(str(detalle))}")
+    return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(str(detalle))}", status_code=303)
 
 
 @app.post("/crear-publicacion", response_class=HTMLResponse)
