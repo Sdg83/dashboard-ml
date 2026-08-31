@@ -297,6 +297,11 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
     <body>
         {NAV_HTML}
         <h1>Mis Publicaciones - Global Selling</h1>
+        <div style="background:#fff8e1; color:#8a6d00; padding:10px 14px; border-radius:4px; margin-bottom:16px; font-size:14px;">
+            El estado (Activa/Pausada) que ves aca es el agregado de Mercado Libre y puede no reflejar al instante lo que pasa en cada pais.
+            Si ML pausa, cierra o remueve una publicacion por moderacion en un pais puntual, puede no verse reflejado aca.
+            Ante cualquier duda, confirma el estado real en <a href="https://global-selling.mercadolibre.com" target="_blank">el panel de Global Selling</a>.
+        </div>
         {banner}
         <form method="get" style="background:white; padding:16px; border-radius:4px; margin-bottom:16px; display:flex; gap:16px; align-items:end; flex-wrap:wrap;">
             <div>
