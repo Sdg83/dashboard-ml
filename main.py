@@ -3,6 +3,7 @@ import json
 import time
 import requests
 from urllib.parse import quote
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from dotenv import load_dotenv
@@ -174,6 +175,42 @@ def publicaciones_detalle():
 
     return {"total": len(detalles), "publicaciones": detalles}
 
+
+def consultar_estado_local(par, headers):
+    """par = (site_id, item_id_local). Devuelve (par, (status, sub_status))."""
+    site, local_id = par
+    for h in (headers, {}):
+        try:
+            r = requests.get(f"https://api.mercadolibre.com/items/{local_id}?attributes=status,sub_status", headers=h, timeout=15)
+            if r.status_code == 200:
+                d = r.json()
+                return par, (d.get("status", "?"), d.get("sub_status") or [])
+        except Exception:
+            pass
+    return par, ("?", [])
+
+
+def html_paises(sites_ids, estados):
+    """Arma el texto de la columna Paises con el estado real de cada pais."""
+    if not estados:
+        return ", ".join(sites_ids)
+    piezas = []
+    for site in sites_ids:
+        st, sub = estados.get(site, ("?", []))
+        if st == "active":
+            color, txt = "#2e7d32", "Activa"
+        elif st == "paused":
+            color, txt = "#f9a825", "Pausada"
+        elif st in ("closed", "under_review", "inactive"):
+            color, txt = "#c62828", {"closed": "Cerrada", "under_review": "En revision", "inactive": "Inactiva"}[st]
+        else:
+            color, txt = "#757575", "Sin dato"
+        if sub:
+            txt += f" ({', '.join(sub)})"
+        piezas.append(f'<div><b>{site}</b>: <span style="color:{color}; font-weight:bold;">{txt}</span></div>')
+    return "".join(piezas)
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden: str = "", buscar: str = ""):
     token_data = cargar_token()
@@ -221,6 +258,7 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
             "foto": item.get("thumbnail", ""),
             "sites_ids": sorted(set(m["site_id"] for m in marketplace_items)),
             "siteless_id": marketplace_items[0]["siteless_user_product_id"] if marketplace_items else "",
+            "locales": [(m["site_id"], m["item_id"]) for m in marketplace_items if m.get("site_id") and m.get("item_id")],
         })
 
     if estado in ("active", "paused"):
@@ -240,6 +278,13 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
         campo, descendente = ORDENES[orden]
         productos.sort(key=lambda p: p[campo], reverse=descendente)
 
+    # Estado real por pais (se consulta solo para los productos que se muestran)
+    todos_locales = [par for p in productos for par in p["locales"]]
+    estados_locales = {}
+    if todos_locales:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            estados_locales = dict(ex.map(lambda par: consultar_estado_local(par, headers), todos_locales))
+
     filas = ""
     for p in productos:
         item_id = p["item_id"]
@@ -251,7 +296,7 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
         estado_item = p["estado"]
         sub_estado = p["sub_estado"]
         foto = p["foto"]
-        paises = ", ".join(p["sites_ids"])
+        paises = html_paises(p["sites_ids"], {site: estados_locales.get((site, lid), ("?", [])) for site, lid in p["locales"]})
         sites_csv = ",".join(p["sites_ids"])
         siteless_id = p["siteless_id"]
 
