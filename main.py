@@ -31,6 +31,7 @@ NAV_HTML = """
     <a href="/ventas" style="color:#fff; text-decoration:none; font-weight:bold;">Ventas</a>
     <a href="/publicar" style="text-decoration:none; font-weight:bold; background:#ffe600; color:#333; padding:6px 14px; border-radius:4px;">+ Publicar producto</a>
     <a href="/notificaciones" style="color:#fff; text-decoration:none; font-weight:bold;">Notificaciones</a>
+    <a href="/oportunidades" style="color:#fff; text-decoration:none; font-weight:bold;">Oportunidades</a>
 </div>
 """
 
@@ -83,6 +84,10 @@ def obtener_access_token():
     if not token_data:
         return None
     return token_data.get("access_token")
+
+
+import oportunidades
+oportunidades.registrar(app, obtener_access_token, renovar_token, NAV_HTML)
 
 
 @app.get("/")
