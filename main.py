@@ -269,12 +269,12 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
 
         filas += f"""
         <tr>
-            <td><img src="{foto}" width="60"></td>
+            <td><a href="/ir-a-publicacion?item_id={item_id}" target="_blank" title="Ver la publicacion en Mercado Libre"><img src="{foto}" width="60"></a></td>
             <td>{titulo}</td>
             <td>
                 USD {precio}
                 <form action="/cambiar-precio" method="get" style="margin-top:4px;">
-                    <input type="hidden" name="siteless_id" value="{siteless_id}">
+                    <input type="hidden" name="item_id" value="{item_id}">
                     <input type="hidden" name="sites" value="{sites_csv}">
                     <input type="number" step="0.01" name="nueva_ganancia" style="width:70px;" value="{ganancia_actual}" min="0" placeholder="Ganancia">
                     <button type="submit">Actualizar</button>
@@ -285,10 +285,10 @@ def dashboard(msg: str = None, detalle: str = None, estado: str = "todos", orden
             <td style="color:{color_estado}; font-weight:bold;">{texto_estado}</td>
             <td>{paises}</td>
             <td>
-                <a href="/cambiar-estado?siteless_id={siteless_id}&nuevo_estado=paused" onclick="return confirm('Pausar esta publicacion?');"><button>Pausar</button></a>
-                <a href="/cambiar-estado?siteless_id={siteless_id}&nuevo_estado=active" onclick="return confirm('Activar esta publicacion?');"><button>Activar</button></a>
+                <a href="/cambiar-estado?item_id={item_id}&nuevo_estado=paused" onclick="return confirm('Pausar esta publicacion?');"><button>Pausar</button></a>
+                <a href="/cambiar-estado?item_id={item_id}&nuevo_estado=active" onclick="return confirm('Activar esta publicacion?');"><button>Activar</button></a>
                 <form action="/cambiar-stock" method="get" style="display:inline;">
-                    <input type="hidden" name="siteless_id" value="{siteless_id}">
+                    <input type="hidden" name="item_id" value="{item_id}">
                     <input type="number" name="nueva_cantidad" style="width:60px;" value="{stock if isinstance(stock, int) else ''}" min="0">
                     <button type="submit">Actualizar</button>
                 </form>
@@ -982,7 +982,7 @@ def reintentar_paises(siteless_id: str, ganancia: float, paises: str):
     return response.json()
 
 @app.get("/cambiar-estado")
-def cambiar_estado(siteless_id: str, nuevo_estado: str):
+def cambiar_estado(item_id: str, nuevo_estado: str):
     access_token = obtener_access_token()
     if not access_token:
         return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote('No se pudo renovar el token')}")
@@ -991,20 +991,22 @@ def cambiar_estado(siteless_id: str, nuevo_estado: str):
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
     }
-    url = f"https://api.mercadolibre.com/global/user-products/{siteless_id}"
-    body = {"status": nuevo_estado}
-    response = requests.put(url, headers=headers, json=body)
+    url = f"https://api.mercadolibre.com/global/items/{item_id}"
+    response = requests.put(url, headers=headers, json={"status": nuevo_estado})
 
     if response.status_code == 200:
         detalle = quote("Mercado Libre acepto el pedido. Puede tardar en reflejarse por pais.")
         return RedirectResponse(url=f"/dashboard?msg=ok&detalle={detalle}")
 
-    detalle = response.json().get("message", f"HTTP {response.status_code}")
+    try:
+        detalle = response.json().get("message", f"HTTP {response.status_code}")
+    except Exception:
+        detalle = f"HTTP {response.status_code}"
     return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
 
 
 @app.get("/cambiar-stock")
-def cambiar_stock(siteless_id: str, nueva_cantidad: int):
+def cambiar_stock(item_id: str, nueva_cantidad: int):
     access_token = obtener_access_token()
     if not access_token:
         return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote('No se pudo renovar el token')}")
@@ -1013,19 +1015,21 @@ def cambiar_stock(siteless_id: str, nueva_cantidad: int):
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
     }
-    url = f"https://api.mercadolibre.com/global/user-products/{siteless_id}"
-    body = {"available_quantity": nueva_cantidad}
-    response = requests.put(url, headers=headers, json=body)
+    url = f"https://api.mercadolibre.com/global/items/{item_id}"
+    response = requests.put(url, headers=headers, json={"available_quantity": nueva_cantidad})
 
     if response.status_code == 200:
         return RedirectResponse(url="/dashboard?msg=ok")
 
-    detalle = response.json().get("message", f"HTTP {response.status_code}")
+    try:
+        detalle = response.json().get("message", f"HTTP {response.status_code}")
+    except Exception:
+        detalle = f"HTTP {response.status_code}"
     return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
 
 
 @app.get("/cambiar-precio")
-def cambiar_precio(siteless_id: str, nueva_ganancia: float, sites: str):
+def cambiar_precio(item_id: str, nueva_ganancia: float, sites: str):
     access_token = obtener_access_token()
     if not access_token:
         return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote('No se pudo renovar el token')}")
@@ -1039,25 +1043,62 @@ def cambiar_precio(siteless_id: str, nueva_ganancia: float, sites: str):
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
     }
-    url = f"https://api.mercadolibre.com/global/user-products/{siteless_id}"
-    body = {
-        "sites_to_sell": [
-            {
-                "site_id": site,
-                "logistic_type": "remote",
-                "user_id": USER_IDS_POR_SITIO[site],
-                "net_proceeds": nueva_ganancia,
-            }
-            for site in lista_sites
-        ]
-    }
-    response = requests.put(url, headers=headers, json=body)
+    url = f"https://api.mercadolibre.com/global/items/{item_id}"
+    errores = []
+    for site in lista_sites:
+        body = {"site_id": site, "logistic_type": "remote", "net_proceeds": nueva_ganancia}
+        response = requests.put(url, headers=headers, json=body)
+        if response.status_code != 200:
+            try:
+                msg_err = response.json().get("message", f"HTTP {response.status_code}")
+            except Exception:
+                msg_err = f"HTTP {response.status_code}"
+            errores.append(f"{site}: {msg_err}")
 
-    if response.status_code == 200:
-        return RedirectResponse(url="/dashboard?msg=ok")
+    if not errores:
+        detalle = quote("Precio enviado a Mercado Libre. Puede tardar unos minutos en verse.")
+        return RedirectResponse(url=f"/dashboard?msg=ok&detalle={detalle}")
 
-    detalle = response.json().get("message", f"HTTP {response.status_code}")
-    return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
+    return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(' | '.join(errores))}")
+
+
+DOMINIOS_SITIO = {
+    "MLA": "articulo.mercadolibre.com.ar",
+    "MLB": "produto.mercadolivre.com.br",
+    "MCO": "articulo.mercadolibre.com.co",
+    "MLC": "articulo.mercadolibre.cl",
+    "MLM": "articulo.mercadolibre.com.mx",
+}
+
+
+@app.get("/ir-a-publicacion")
+def ir_a_publicacion(item_id: str, site: str = ""):
+    """Abre la publicacion en Mercado Libre (la del pais indicado, o la primera disponible)."""
+    access_token = obtener_access_token()
+    if not access_token:
+        return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote('No se pudo renovar el token')}")
+    headers = {"Authorization": f"Bearer {access_token}"}
+    item = requests.get(f"https://api.mercadolibre.com/marketplace/items/{item_id}", headers=headers).json()
+    locales = []
+    for m in item.get("marketplace_items", []) or []:
+        local_id = m.get("item_id") or m.get("id")
+        if local_id and m.get("site_id"):
+            locales.append((m["site_id"], local_id))
+    if site:
+        elegidos = [x for x in locales if x[0] == site] or locales
+    else:
+        orden = ["MLA", "MLC", "MCO", "MLB", "MLM"]
+        elegidos = sorted(locales, key=lambda x: orden.index(x[0]) if x[0] in orden else 99)
+    if not elegidos:
+        detalle = "No encontre el numero de publicacion de ningun pais (proba de nuevo en unos minutos)"
+        return RedirectResponse(url=f"/dashboard?msg=error&detalle={quote(detalle)}")
+    sitio, local_id = elegidos[0]
+    local = requests.get(f"https://api.mercadolibre.com/items/{local_id}", headers=headers).json()
+    permalink = local.get("permalink") if isinstance(local, dict) else None
+    if not permalink:
+        dominio = DOMINIOS_SITIO.get(sitio, "articulo.mercadolibre.com.ar")
+        permalink = f"https://{dominio}/{sitio}-{local_id.replace(sitio, '')}"
+    return RedirectResponse(url=permalink)
 
 
 @app.get("/ventas", response_class=HTMLResponse)
