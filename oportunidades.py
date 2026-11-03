@@ -146,6 +146,43 @@ def calcular_margen(precio, costo_usa, fx, comision_pct, envio_cbt_usd, impuesto
 
 
 # ----------------------------------------------------------------- API
+def _normalizar_oferta(o):
+    """Unifica ofertas de /products/{id}/items con el formato de /sites/search."""
+    o = dict(o)
+    if "seller" not in o:
+        sid = o.get("seller_id")
+        if sid is None and isinstance(o.get("seller_info"), dict):
+            sid = o["seller_info"].get("id")
+        o["seller"] = {"id": sid}
+    return o
+
+
+def _buscar_por_catalogo(k, site, max_productos=8):
+    """Plan B cuando /sites/{SITE}/search da 403: catálogo (/products/search) y sus ofertas.
+    Devuelve (items, error_texto)."""
+    st, data = _get("/products/search", {"status": "active", "site_id": site, "q": k, "limit": max_productos})
+    if st != 200 or not isinstance(data, dict):
+        return [], f"catálogo HTTP {st}"
+    productos = data.get("results") or []
+    items = []
+    for p in productos[:max_productos]:
+        pid = p.get("id") if isinstance(p, dict) else None
+        if not pid:
+            continue
+        st2, d2 = _get(f"/products/{pid}/items", {"limit": 50})
+        if st2 != 200:
+            continue
+        ofertas = d2.get("results") if isinstance(d2, dict) else d2
+        for o in (ofertas or []):
+            if isinstance(o, dict):
+                items.append(_normalizar_oferta(o))
+        if len(items) >= 50:
+            break
+    if not items:
+        return [], "catálogo sin ofertas"
+    return items[:50], None
+
+
 @router.post("/api/oportunidades/analizar")
 async def analizar(request: Request):
     cuerpo = await request.json()
@@ -154,17 +191,58 @@ async def analizar(request: Request):
     filas = []
     for k in claves:
         status, data = _get(f"/sites/{site}/search", {"q": k, "limit": 50})
-        if status != 200 or not isinstance(data, dict):
+        fuente = "búsqueda"
+        if status == 200 and isinstance(data, dict):
+            items = data.get("results", [])
+            total = (data.get("paging") or {}).get("total")
+        else:
             msg = f"HTTP {status}"
             if isinstance(data, dict):
-                msg += " - " + str(data.get("message") or data.get("error") or "")[:160]
-            filas.append({"keyword": k, "error": msg})
-            continue
-        fila = analizar_resultados(data.get("results", []), site)
+                msg += " - " + str(data.get("message") or data.get("error") or "")[:120]
+            items, err2 = _buscar_por_catalogo(k, site)
+            if err2:
+                filas.append({"keyword": k, "error": f"{msg}; {err2}"})
+                continue
+            fuente, total = "catálogo", None
+        fila = analizar_resultados(items, site)
         fila["keyword"] = k
-        fila["total_resultados"] = (data.get("paging") or {}).get("total")
+        fila["total_resultados"] = total
+        fila["fuente"] = fuente
         filas.append(fila)
     return JSONResponse({"site": site, "filas": filas})
+
+
+@router.get("/api/oportunidades/diagnostico")
+async def diagnostico(q: str = "calendario adviento", site: str = "MLC"):
+    """Prueba qué endpoints responden con tu token y muestra la forma de la respuesta."""
+    pruebas = [
+        ("search", f"/sites/{site}/search", {"q": q, "limit": 3}),
+        ("products_search", "/products/search", {"status": "active", "site_id": site, "q": q, "limit": 3}),
+        ("domain_discovery", f"/sites/{site}/domain_discovery/search", {"q": q}),
+        ("trends", f"/trends/{site}", None),
+    ]
+    out = {}
+    for nombre, path, params in pruebas:
+        st, d = _get(path, params)
+        resumen = {"status": st}
+        if isinstance(d, dict):
+            resumen["claves"] = list(d.keys())[:15]
+            if not (200 <= st < 300):
+                resumen["mensaje"] = str(d.get("message") or d.get("error"))[:200]
+            res = d.get("results")
+            if isinstance(res, list) and res and isinstance(res[0], dict):
+                resumen["claves_primer_resultado"] = list(res[0].keys())[:40]
+                if nombre == "products_search" and res[0].get("id"):
+                    st2, d2 = _get(f"/products/{res[0]['id']}/items", {"limit": 3})
+                    r2 = d2.get("results") if isinstance(d2, dict) else d2
+                    resumen["items_del_producto"] = {
+                        "status": st2,
+                        "claves_primer_item": list(r2[0].keys())[:40] if isinstance(r2, list) and r2 and isinstance(r2[0], dict) else None,
+                    }
+        elif isinstance(d, list) and d:
+            resumen["n"] = len(d)
+        out[nombre] = resumen
+    return JSONResponse(out)
 
 
 @router.get("/api/oportunidades/tendencias")
@@ -276,7 +354,7 @@ function dibujar(){
   if(f.error) return `<tr><td>${esc(f.keyword)}</td><td colspan="10" class="err" style="text-align:left">Error: ${esc(f.error)}</td></tr>`;
   const rojo=(m!=null&&m<min)?' class="rojo"':'';
   const vend=f.vendidos==null?"sin dato":((f.vendidosAprox||f.vendidos_aprox)?"≥ ":"")+fmt(f.vendidos);
-  return `<tr${rojo}><td>${esc(f.keyword)}</td><td>${f.publicaciones}</td><td>${fmt(f.precio_min)}</td><td>${fmt(f.precio_mediana)}</td><td>${fmt(f.precio_max)}</td>
+  return `<tr${rojo}><td>${esc(f.keyword)}${f.fuente==="catálogo"?' <span class="nota">(catálogo)</span>':""}</td><td>${f.publicaciones}</td><td>${fmt(f.precio_min)}</td><td>${fmt(f.precio_mediana)}</td><td>${fmt(f.precio_max)}</td>
   <td>${f.vendedores}</td><td>${f.vendedores_cbt}</td><td>${vend}</td><td>${f.demanda}</td>
   <td><input type="number" step="0.01" value="${f.costo??""}" onchange="setCosto(${i},this.value)"></td><td id="m${i}">${m==null?"–":m.toFixed(1)+"%"}</td></tr>`;
  }).join("");
