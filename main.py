@@ -1280,3 +1280,29 @@ def etiqueta(shipment_id: str):
     return HTMLResponse(
         f"<h2 style='color:red;'>No se pudo generar la etiqueta: {detalle}</h2><a href='/ventas'>Volver</a>"
     )
+
+
+@app.get("/debug-item")
+def debug_item(item_id: str):
+    """Diagnostico: devuelve crudo lo que ML responde para una publicacion CBT y sus copias locales."""
+    access_token = obtener_access_token()
+    if not access_token:
+        return {"error": "sin token"}
+    headers = {"Authorization": f"Bearer {access_token}"}
+    out = {}
+    r = requests.get(f"https://api.mercadolibre.com/marketplace/items/{item_id}", headers=headers, timeout=20)
+    out["marketplace_item"] = {"http": r.status_code, "body": r.json() if r.content else None}
+    locales = []
+    try:
+        locales = [(m.get("site_id"), m.get("item_id")) for m in out["marketplace_item"]["body"].get("marketplace_items", [])]
+    except Exception:
+        pass
+    out["locales"] = {}
+    for site, lid in locales:
+        rr = requests.get(f"https://api.mercadolibre.com/items/{lid}", headers=headers, timeout=20)
+        try:
+            cuerpo = rr.json()
+        except Exception:
+            cuerpo = rr.text[:300]
+        out["locales"][f"{site}:{lid}"] = {"http": rr.status_code, "body": cuerpo}
+    return out
