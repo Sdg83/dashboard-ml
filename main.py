@@ -177,17 +177,20 @@ def publicaciones_detalle():
 
 
 def consultar_estado_local(par, headers):
-    """par = (site_id, item_id_local). Devuelve (par, (status, sub_status))."""
+    """par = (site_id, item_id_local). Devuelve (par, (status, sub_status)).
+    Si ML no devuelve el item, status = 'http_<codigo>' para poder explicarlo en pantalla."""
     site, local_id = par
+    ultimo = "?"
     for h in (headers, {}):
         try:
             r = requests.get(f"https://api.mercadolibre.com/items/{local_id}?attributes=status,sub_status", headers=h, timeout=15)
             if r.status_code == 200:
                 d = r.json()
                 return par, (d.get("status", "?"), d.get("sub_status") or [])
+            ultimo = f"http_{r.status_code}"
         except Exception:
-            pass
-    return par, ("?", [])
+            ultimo = "error_red"
+    return par, (ultimo, [])
 
 
 def html_paises(sites_ids, estados):
@@ -203,6 +206,14 @@ def html_paises(sites_ids, estados):
             color, txt = "#f9a825", "Pausada"
         elif st in ("closed", "under_review", "inactive"):
             color, txt = "#c62828", {"closed": "Cerrada", "under_review": "En revision", "inactive": "Inactiva"}[st]
+        elif st in ("http_404", "http_410"):
+            color, txt = "#c62828", "Eliminada por ML"
+        elif st == "http_403":
+            color, txt = "#757575", "Sin permiso de lectura (ver panel ML)"
+        elif st == "error_red":
+            color, txt = "#757575", "Error de red, recarga"
+        elif st.startswith("http_"):
+            color, txt = "#757575", f"Sin dato ({st[5:]})"
         else:
             color, txt = "#757575", "Sin dato"
         if sub:
