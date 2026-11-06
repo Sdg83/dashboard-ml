@@ -1212,10 +1212,11 @@ def ventas():
             else "-"
         )
 
+        orden_id = orden.get("id", "")
         filas += f"""
-        <tr>
+        <tr style="cursor:pointer;" title="Ver detalle de la venta" onclick="if(!event.target.closest('a,button')) location.href='/venta?order_id={orden_id}'">
             <td><img src="{foto}" width="50"></td>
-            <td>{titulo}</td>
+            <td><a href="/venta?order_id={orden_id}" style="color:#1a56db;text-decoration:none;">{titulo}</a></td>
             <td>{comprador}</td>
             <td>{estado}</td>
             <td>{tracking}</td>
@@ -1248,6 +1249,134 @@ def ventas():
                 <th>Etiqueta</th>
             </tr>
             {filas if filas else '<tr><td colspan="6">Todavia no tenes ventas.</td></tr>'}
+        </table>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
+
+@app.get("/venta", response_class=HTMLResponse)
+def venta_detalle(order_id: str):
+    import html as html_mod
+    from datetime import datetime, timezone
+    token_data = cargar_token()
+    if not token_data:
+        return HTMLResponse("<h2>No hay token guardado. <a href='/'>Conectate primero</a></h2>")
+    access_token = obtener_access_token()
+    if not access_token:
+        return HTMLResponse("<h2>No se pudo renovar el token. <a href='/'>Conectate de nuevo</a></h2>")
+    user_id = token_data["user_id"]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    # Buscar la orden: primero directo, si no en la lista de ventas
+    orden = None
+    r = requests.get(f"https://api.mercadolibre.com/marketplace/orders/{order_id}", headers=headers)
+    if r.status_code == 200:
+        try:
+            orden = r.json()
+        except ValueError:
+            orden = None
+    if not orden or not isinstance(orden, dict) or orden.get("error"):
+        lista = requests.get(f"https://api.mercadolibre.com/marketplace/orders/search?seller={user_id}", headers=headers).json()
+        for o in lista.get("results", []):
+            if str(o.get("id")) == str(order_id):
+                orden = o
+                break
+    if not orden:
+        return HTMLResponse(f"<h2>No encontre la venta {html_mod.escape(order_id)}. <a href='/ventas'>Volver</a></h2>")
+
+    ESTADOS_ENVIO = {
+        "pending": "Pendiente", "handling": "Preparando", "ready_to_ship": "Listo para enviar",
+        "shipped": "Enviado", "delivered": "Entregado", "not_delivered": "No entregado",
+        "cancelled": "Cancelado",
+    }
+    ESTADOS_IMPRIMIBLES = {"pending", "ready_to_ship", "handling"}
+
+    items = orden.get("config", {}).get("items", []) or []
+    item_id = items[0].get("id", "") if items else ""
+    cantidad = items[0].get("quantity", "") if items else ""
+    item = requests.get(f"https://api.mercadolibre.com/marketplace/items/{item_id}", headers=headers).json() if item_id else {}
+    titulo = item.get("title", "Sin titulo")
+    foto = item.get("thumbnail", "")
+
+    shipment_id = (orden.get("shipment") or {}).get("id")
+    envio = {}
+    if shipment_id:
+        envio = requests.get(f"https://api.mercadolibre.com/marketplace/shipments/{shipment_id}", headers=headers).json()
+    estado_raw = envio.get("status", "") if isinstance(envio, dict) else ""
+    subestado = envio.get("substatus", "") if isinstance(envio, dict) else ""
+    tracking = (envio.get("tracking_number") or "") if isinstance(envio, dict) else ""
+
+    buyer_id = (orden.get("buyer") or {}).get("id", "")
+    comprador = ""
+    if buyer_id:
+        u = requests.get(f"https://api.mercadolibre.com/users/{buyer_id}", headers=headers).json()
+        comprador = u.get("nickname", "") if isinstance(u, dict) else ""
+
+    fecha_txt, antiguedad = "-", ""
+    fecha = orden.get("date_created") or orden.get("date_closed") or ""
+    if fecha:
+        fecha_txt = str(fecha)
+        try:
+            dt = datetime.fromisoformat(str(fecha).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            dias = (datetime.now(timezone.utc) - dt).days
+            antiguedad = f" (hace {dias} dia{'s' if dias != 1 else ''})"
+            fecha_txt = dt.strftime("%d/%m/%Y %H:%M")
+        except ValueError:
+            pass
+
+    estado_envio = ESTADOS_ENVIO.get(estado_raw, estado_raw or "Sin dato")
+    if estado_raw in ESTADOS_IMPRIMIBLES and shipment_id:
+        accion = f'<a href="/etiqueta?shipment_id={shipment_id}" target="_blank"><button style="padding:12px 24px;font-size:16px;background:#ffe600;border:1px solid #bbb;border-radius:6px;cursor:pointer;">Imprimir etiqueta</button></a>'
+    elif estado_raw in ("shipped", "delivered"):
+        accion = '<p style="color:#2e7d32;font-weight:bold;">Esta venta ya fue enviada, no hace falta etiqueta.</p>'
+    elif estado_raw == "cancelled":
+        accion = '<p style="color:#c62828;font-weight:bold;">Venta cancelada, no se puede imprimir etiqueta.</p>'
+    elif not shipment_id:
+        accion = '<p style="color:#757575;">Esta venta todavia no tiene un envio asociado.</p>'
+    else:
+        accion = f'<p style="color:#757575;">No se puede imprimir la etiqueta en este estado ({html_mod.escape(estado_envio)}).</p>'
+
+    def fila(k, v):
+        return f"<tr><th style='width:200px;'>{k}</th><td>{html_mod.escape(str(v)) if v not in (None, '') else '-'}</td></tr>"
+
+    total = orden.get("total_amount") or orden.get("paid_amount") or ""
+    moneda = orden.get("currency_id", "")
+
+    html = f"""
+    <html>
+    <head>
+        <title>Venta {html_mod.escape(str(order_id))}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            table {{ width: 100%; max-width: 800px; border-collapse: collapse; background: white; margin-bottom: 20px; }}
+            th, td {{ padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }}
+            th {{ background: #fafafa; }}
+            pre {{ background: #222; color: #ddd; padding: 12px; overflow: auto; max-height: 400px; }}
+        </style>
+    </head>
+    <body>
+        {NAV_HTML}
+        <p><a href="/ventas">&larr; Volver a Ventas</a></p>
+        <h1>Venta {html_mod.escape(str(order_id))}</h1>
+        <div style="display:flex;gap:20px;align-items:center;margin-bottom:20px;">
+            <img src="{foto}" width="90">
+            <div><b>{html_mod.escape(titulo)}</b></div>
+        </div>
+        <div style="margin-bottom:20px;">{accion}</div>
+        <table>
+            {fila("Fecha", fecha_txt + antiguedad)}
+            {fila("Comprador", comprador)}
+            {fila("Cantidad", cantidad)}
+            {fila("Total", f"{total} {moneda}".strip())}
+            {fila("Estado de la orden", orden.get("status", ""))}
+            {fila("Estado del envio", estado_envio)}
+            {fila("Detalle del envio", subestado)}
+            {fila("Tracking", tracking)}
+            {fila("Envio N", shipment_id)}
         </table>
     </body>
     </html>
